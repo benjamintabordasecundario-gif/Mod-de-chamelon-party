@@ -1,0 +1,908 @@
+name: Construir mod
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Escribir archivos
+        run: |
+          mkdir -p work/java/com/mod work/jni out
+          cat > work/java/com/mod/Menu.java <<'EOF_JAVA'
+          package com.mod;
+          
+          import android.app.Activity;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.ColorFilter;
+          import android.graphics.Paint;
+          import android.graphics.PixelFormat;
+          import android.graphics.Rect;
+          import android.graphics.RectF;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.Drawable;
+          import android.graphics.drawable.GradientDrawable;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.CompoundButton;
+          import android.widget.FrameLayout;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.SeekBar;
+          import android.widget.Switch;
+          import android.widget.TextView;
+          import android.widget.Toast;
+          
+          public class Menu {
+          
+              static native void nNoclip(boolean on);
+              static native void nGod(boolean on);
+              static native void nSpeed(float mult);
+              static native void nSize(float mult);
+              static native void nUnlock();
+              static native void nVertical(int dir);
+              static native String nStatus();
+          
+              private static boolean started = false;
+          
+              // Envoltorios seguros: si algo falla en nativo, el juego no se cierra.
+              static void cNoclip(boolean v) { try { nNoclip(v); } catch (Throwable t) { } }
+              static void cGod(boolean v) { try { nGod(v); } catch (Throwable t) { } }
+              static void cSpeed(float v) { try { nSpeed(v); } catch (Throwable t) { } }
+              static void cSize(float v) { try { nSize(v); } catch (Throwable t) { } }
+              static void cUnlock() { try { nUnlock(); } catch (Throwable t) { } }
+              static void cVertical(int v) { try { nVertical(v); } catch (Throwable t) { } }
+              static String cStatus() {
+                  try { return nStatus(); } catch (Throwable t) { return "sin conexion con el juego"; }
+              }
+          
+              public static void start(final Activity a) {
+                  if (started) return;
+                  started = true;
+                  a.runOnUiThread(new Runnable() {
+                      public void run() {
+                          try {
+                              build(a);
+                          } catch (Throwable t) {
+                              started = false;
+                          }
+                      }
+                  });
+              }
+          
+              private static int dp(Activity a, float v) {
+                  return (int) (v * a.getResources().getDisplayMetrics().density + 0.5f);
+              }
+          
+              // Carita de Pacman dibujada por codigo (no necesita imagen).
+              private static class Pacman extends Drawable {
+                  private final Paint body = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final Paint eye = new Paint(Paint.ANTI_ALIAS_FLAG);
+          
+                  Pacman() {
+                      body.setColor(Color.rgb(255, 214, 0));
+                      body.setStyle(Paint.Style.FILL);
+                      line.setColor(Color.rgb(130, 90, 0));
+                      line.setStyle(Paint.Style.STROKE);
+                      line.setStrokeWidth(5f);
+                      eye.setColor(Color.BLACK);
+                      eye.setStyle(Paint.Style.FILL);
+                  }
+          
+                  @Override
+                  public void draw(Canvas c) {
+                      Rect b = getBounds();
+                      float pad = b.width() * 0.06f;
+                      RectF r = new RectF(b.left + pad, b.top + pad, b.right - pad, b.bottom - pad);
+                      c.drawArc(r, 32f, 296f, true, body);
+                      c.drawArc(r, 32f, 296f, true, line);
+                      c.drawCircle(b.left + b.width() * 0.52f, b.top + b.height() * 0.28f, b.width() * 0.06f, eye);
+                  }
+          
+                  @Override
+                  public void setAlpha(int alpha) { body.setAlpha(alpha); }
+          
+                  @Override
+                  public void setColorFilter(ColorFilter cf) { body.setColorFilter(cf); }
+          
+                  @Override
+                  public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+              }
+          
+              private static void build(final Activity a) {
+                  final FrameLayout root = new FrameLayout(a);
+                  final int bs = dp(a, 54);
+          
+                  final ImageView bubble = new ImageView(a);
+                  bubble.setImageDrawable(new Pacman());
+                  final FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(bs, bs);
+                  blp.leftMargin = dp(a, 10);
+                  blp.topMargin = dp(a, 140);
+                  root.addView(bubble, blp);
+          
+                  final LinearLayout panel = buildPanel(a);
+                  panel.setVisibility(View.GONE);
+                  FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(dp(a, 270), ViewGroup.LayoutParams.WRAP_CONTENT);
+                  plp.gravity = Gravity.CENTER;
+                  root.addView(panel, plp);
+          
+                  final TextView statusView = (TextView) panel.getTag();
+          
+                  bubble.setOnTouchListener(new View.OnTouchListener() {
+                      float downX, downY;
+                      int startL, startT;
+                      boolean moved;
+          
+                      public boolean onTouch(View v, MotionEvent e) {
+                          int ac = e.getActionMasked();
+                          if (ac == MotionEvent.ACTION_DOWN) {
+                              downX = e.getRawX();
+                              downY = e.getRawY();
+                              startL = blp.leftMargin;
+                              startT = blp.topMargin;
+                              moved = false;
+                              return true;
+                          } else if (ac == MotionEvent.ACTION_MOVE) {
+                              float dx = e.getRawX() - downX;
+                              float dy = e.getRawY() - downY;
+                              if (Math.abs(dx) > dp(a, 6) || Math.abs(dy) > dp(a, 6)) moved = true;
+                              if (moved) {
+                                  blp.leftMargin = Math.max(0, (int) (startL + dx));
+                                  blp.topMargin = Math.max(0, (int) (startT + dy));
+                                  bubble.setLayoutParams(blp);
+                              }
+                              return true;
+                          } else if (ac == MotionEvent.ACTION_UP) {
+                              if (!moved) {
+                                  if (panel.getVisibility() == View.VISIBLE) {
+                                      panel.setVisibility(View.GONE);
+                                  } else {
+                                      statusView.setText("Estado: " + cStatus());
+                                      panel.setVisibility(View.VISIBLE);
+                                  }
+                              }
+                              return true;
+                          }
+                          return false;
+                      }
+                  });
+          
+                  a.addContentView(root, new ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+              }
+          
+              private static TextView label(Activity a, String text, float size, boolean bold) {
+                  TextView t = new TextView(a);
+                  t.setText(text);
+                  t.setTextColor(Color.WHITE);
+                  t.setTextSize(size);
+                  if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+                  return t;
+              }
+          
+              private static Switch makeSwitch(Activity a, String text, CompoundButton.OnCheckedChangeListener l) {
+                  Switch s = new Switch(a);
+                  s.setText(text);
+                  s.setTextColor(Color.WHITE);
+                  s.setTextSize(16f);
+                  s.setPadding(0, dp(a, 6), 0, dp(a, 6));
+                  s.setOnCheckedChangeListener(l);
+                  return s;
+              }
+          
+              private static void addSeek(final Activity a, LinearLayout p, final String name,
+                                          int max, int init, final boolean isSpeed) {
+                  final TextView tv = label(a, name + ": 1.00x", 14f, false);
+                  tv.setPadding(0, dp(a, 8), 0, 0);
+                  p.addView(tv);
+                  SeekBar sb = new SeekBar(a);
+                  sb.setMax(max);
+                  sb.setProgress(init);
+                  sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      public void onProgressChanged(SeekBar s, int prog, boolean fromUser) {
+                          float m = isSpeed ? (4 + prog) / 4f : (3 + prog) / 10f;
+                          tv.setText(name + ": " + String.format(java.util.Locale.US, "%.2f", m) + "x");
+                          if (isSpeed) cSpeed(m); else cSize(m);
+                      }
+                      public void onStartTrackingTouch(SeekBar s) { }
+                      public void onStopTrackingTouch(SeekBar s) { }
+                  });
+                  p.addView(sb);
+              }
+          
+              private static Button flyButton(Activity a, String text, final int dir) {
+                  Button b = new Button(a);
+                  b.setText(text);
+                  b.setOnTouchListener(new View.OnTouchListener() {
+                      public boolean onTouch(View v, MotionEvent e) {
+                          int ac = e.getActionMasked();
+                          if (ac == MotionEvent.ACTION_DOWN) {
+                              cVertical(dir);
+                          } else if (ac == MotionEvent.ACTION_UP || ac == MotionEvent.ACTION_CANCEL) {
+                              cVertical(0);
+                          }
+                          return true;
+                      }
+                  });
+                  return b;
+              }
+          
+              private static LinearLayout buildPanel(final Activity a) {
+                  LinearLayout p = new LinearLayout(a);
+                  p.setOrientation(LinearLayout.VERTICAL);
+                  int pad = dp(a, 14);
+                  p.setPadding(pad, pad, pad, pad);
+                  p.setClickable(true);
+          
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.argb(235, 20, 20, 30));
+                  bg.setCornerRadius(dp(a, 16));
+                  bg.setStroke(dp(a, 2), Color.rgb(255, 214, 0));
+                  p.setBackground(bg);
+          
+                  p.addView(label(a, "Chameleon Mod", 20f, true));
+                  TextView status = label(a, "Estado: ...", 12f, false);
+                  status.setTextColor(Color.rgb(170, 170, 170));
+                  p.addView(status);
+                  p.setTag(status);
+          
+                  p.addView(makeSwitch(a, "Noclip (atravesar paredes)", new CompoundButton.OnCheckedChangeListener() {
+                      public void onCheckedChanged(CompoundButton b, boolean on) { cNoclip(on); }
+                  }));
+          
+                  LinearLayout fly = new LinearLayout(a);
+                  fly.setOrientation(LinearLayout.HORIZONTAL);
+                  fly.addView(flyButton(a, "\u25B2 Subir", 1),
+                          new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                  fly.addView(flyButton(a, "\u25BC Bajar", -1),
+                          new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                  p.addView(fly);
+          
+                  p.addView(makeSwitch(a, "God mode (no morir)", new CompoundButton.OnCheckedChangeListener() {
+                      public void onCheckedChanged(CompoundButton b, boolean on) { cGod(on); }
+                  }));
+          
+                  addSeek(a, p, "Velocidad", 36, 0, true);
+                  addSeek(a, p, "Tama\u00f1o", 29, 7, false);
+          
+                  Button unlock = new Button(a);
+                  unlock.setText("Desbloquear todo");
+                  unlock.setOnClickListener(new View.OnClickListener() {
+                      public void onClick(View v) {
+                          cUnlock();
+                          Toast.makeText(a, "Hecho. Si no aparece, abre la pantalla de skins/emotes.",
+                                  Toast.LENGTH_LONG).show();
+                      }
+                  });
+                  LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                  ulp.topMargin = dp(a, 10);
+                  p.addView(unlock, ulp);
+          
+                  TextView hint = label(a, "Toca la carita para cerrar el menu", 11f, false);
+                  hint.setTextColor(Color.rgb(150, 150, 150));
+                  hint.setPadding(0, dp(a, 8), 0, 0);
+                  p.addView(hint);
+                  return p;
+              }
+          }
+          EOF_JAVA
+          cat > work/jni/modmenu.cpp <<'EOF_CPP'
+          // Chameleon Party - mod menu (nativo). Usa la API de il2cpp, sin offsets fijos.
+          #include <jni.h>
+          #include <android/log.h>
+          #include <dlfcn.h>
+          #include <pthread.h>
+          #include <unistd.h>
+          #include <sys/stat.h>
+          #include <time.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <string>
+          #include <atomic>
+          #include "dobby.h"
+          #include "dex_data.h"
+          
+          #define TAG "ModMenu"
+          #define LOG(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+          
+          struct Vec3 { float x, y, z; };
+          
+          // ---------- estado compartido con el menu ----------
+          static std::atomic<bool>  g_noclip(false);
+          static std::atomic<bool>  g_god(false);
+          static std::atomic<float> g_speed(1.0f);
+          static std::atomic<float> g_size(1.0f);
+          static std::atomic<int>   g_vy(0);
+          static std::atomic<bool>  g_unlock(false);
+          static char g_status[128] = "iniciando...";
+          
+          static void setStatus(const char* s) { snprintf(g_status, sizeof(g_status), "%s", s); LOG("status: %s", s); }
+          
+          // ---------- API de il2cpp ----------
+          static void* h_il2cpp = nullptr;
+          static void* (*il2cpp_domain_get)();
+          static void* (*il2cpp_thread_attach)(void*);
+          static void* (*il2cpp_domain_assembly_open)(void*, const char*);
+          static void* (*il2cpp_assembly_get_image)(void*);
+          static void* (*il2cpp_class_from_name)(void*, const char*, const char*);
+          static void* (*il2cpp_class_get_method_from_name)(void*, const char*, int);
+          static void* (*il2cpp_class_get_field_from_name)(void*, const char*);
+          static size_t (*il2cpp_field_get_offset)(void*);
+          static void (*il2cpp_field_static_get_value)(void*, void*);
+          static void* (*il2cpp_runtime_invoke)(void*, void*, void**, void**);
+          static void* (*il2cpp_object_unbox)(void*);
+          
+          static bool resolveApi() {
+          #define SYM(fn) fn = (decltype(fn))dlsym(h_il2cpp, #fn); if (!fn) { LOG("falta %s", #fn); return false; }
+              SYM(il2cpp_domain_get)
+              SYM(il2cpp_thread_attach)
+              SYM(il2cpp_domain_assembly_open)
+              SYM(il2cpp_assembly_get_image)
+              SYM(il2cpp_class_from_name)
+              SYM(il2cpp_class_get_method_from_name)
+              SYM(il2cpp_class_get_field_from_name)
+              SYM(il2cpp_field_get_offset)
+              SYM(il2cpp_field_static_get_value)
+              SYM(il2cpp_runtime_invoke)
+              SYM(il2cpp_object_unbox)
+          #undef SYM
+              return true;
+          }
+          
+          // ---------- clases, metodos y campos del juego ----------
+          static void *mPlayerUpdate, *mPlayerKill, *mLobbyUpdate;
+          static void *mGetTransform, *mGetScale, *mSetScale, *mGetPos, *mSetPos;
+          static void *mColEnabled, *mGetVel, *mSetVel;
+          static void *mUnlockSkins, *mUnlockEmotes;
+          static void *fLocalPlayer, *fSkinsInst, *fEmotesInst;
+          static int offRb = 0x28, offCol = 0x38, offSpeed = 0x58, offGrav = 0x64;
+          
+          static bool inv(void* m, void* obj, void** args, void** ret = nullptr) {
+              if (!m) return false;
+              void* exc = nullptr;
+              void* r = il2cpp_runtime_invoke(m, obj, args, &exc);
+              if (ret) *ret = r;
+              return exc == nullptr;
+          }
+          
+          static void* openAsm(void* dom, const char* base) {
+              void* a = il2cpp_domain_assembly_open(dom, base);
+              if (!a) {
+                  std::string n = std::string(base) + ".dll";
+                  a = il2cpp_domain_assembly_open(dom, n.c_str());
+              }
+              return a;
+          }
+          
+          static void* findMethod(void* k, const char* name, int argc) {
+              if (!k) return nullptr;
+              void* m = il2cpp_class_get_method_from_name(k, name, argc);
+              if (!m) LOG("metodo no encontrado: %s", name);
+              return m;
+          }
+          
+          static int findOffset(void* k, const char* name, int fallback) {
+              void* f = k ? il2cpp_class_get_field_from_name(k, name) : nullptr;
+              if (!f) { LOG("campo no encontrado: %s", name); return fallback; }
+              return (int)il2cpp_field_get_offset(f);
+          }
+          
+          static bool initGame() {
+              void* dom = il2cpp_domain_get();
+              if (!dom) return false;
+              il2cpp_thread_attach(dom);
+              void* aCS = openAsm(dom, "Assembly-CSharp");
+              void* aCore = openAsm(dom, "UnityEngine.CoreModule");
+              void* aPhys = openAsm(dom, "UnityEngine.PhysicsModule");
+              if (!aCS || !aCore || !aPhys) return false;
+              void* iCS = il2cpp_assembly_get_image(aCS);
+              void* iCore = il2cpp_assembly_get_image(aCore);
+              void* iPhys = il2cpp_assembly_get_image(aPhys);
+          
+              void* kPlayer = il2cpp_class_from_name(iCS, "", "Player");
+              void* kLobby = il2cpp_class_from_name(iCS, "", "Lobby");
+              void* kSkins = il2cpp_class_from_name(iCS, "", "SkinsManager");
+              void* kEmotes = il2cpp_class_from_name(iCS, "", "EmotesManager");
+              void* kComponent = il2cpp_class_from_name(iCore, "UnityEngine", "Component");
+              void* kTransform = il2cpp_class_from_name(iCore, "UnityEngine", "Transform");
+              void* kCollider = il2cpp_class_from_name(iPhys, "UnityEngine", "Collider");
+              void* kRigidbody = il2cpp_class_from_name(iPhys, "UnityEngine", "Rigidbody");
+              if (!kPlayer || !kComponent || !kTransform || !kCollider || !kRigidbody) return false;
+          
+              mPlayerUpdate = findMethod(kPlayer, "Update", 0);
+              mPlayerKill = findMethod(kPlayer, "Kill", 1);
+              mLobbyUpdate = findMethod(kLobby, "Update", 0);
+              mGetTransform = findMethod(kComponent, "get_transform", 0);
+              mGetScale = findMethod(kTransform, "get_localScale", 0);
+              mSetScale = findMethod(kTransform, "set_localScale", 1);
+              mGetPos = findMethod(kTransform, "get_position", 0);
+              mSetPos = findMethod(kTransform, "set_position", 1);
+              mColEnabled = findMethod(kCollider, "set_enabled", 1);
+              mGetVel = findMethod(kRigidbody, "get_linearVelocity", 0);
+              mSetVel = findMethod(kRigidbody, "set_linearVelocity", 1);
+              mUnlockSkins = findMethod(kSkins, "UnlockAll", 0);
+              mUnlockEmotes = findMethod(kEmotes, "UnlockAll", 0);
+          
+              fLocalPlayer = il2cpp_class_get_field_from_name(kPlayer, "<LocalPlayer>k__BackingField");
+              fSkinsInst = kSkins ? il2cpp_class_get_field_from_name(kSkins, "<Instance>k__BackingField") : nullptr;
+              fEmotesInst = kEmotes ? il2cpp_class_get_field_from_name(kEmotes, "<Instance>k__BackingField") : nullptr;
+          
+              offRb = findOffset(kPlayer, "rb", offRb);
+              offCol = findOffset(kPlayer, "mainCollider", offCol);
+              offSpeed = findOffset(kPlayer, "moveSpeed", offSpeed);
+              offGrav = findOffset(kPlayer, "extraGravity", offGrav);
+              return mPlayerUpdate && mPlayerKill && mGetTransform;
+          }
+          
+          static void* staticObj(void* field) {
+              if (!field) return nullptr;
+              void* o = nullptr;
+              il2cpp_field_static_get_value(field, &o);
+              return o;
+          }
+          
+          // ---------- logica en el hilo principal de Unity ----------
+          static double nowSec() {
+              timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+              return ts.tv_sec + ts.tv_nsec * 1e-9;
+          }
+          
+          static void doUnlock() {
+              bool done = false;
+              void* s = staticObj(fSkinsInst);
+              if (s && inv(mUnlockSkins, s, nullptr)) done = true;
+              void* e = staticObj(fEmotesInst);
+              if (e && inv(mUnlockEmotes, e, nullptr)) done = true;
+              if (!done) g_unlock = true; // se reintenta cuando abras skins/emotes
+              else setStatus("desbloqueado");
+          }
+          
+          static void setCollider(void* col, bool on) {
+              if (!col) return;
+              uint8_t b = on ? 1 : 0;
+              void* a[1] = { &b };
+              inv(mColEnabled, col, a);
+          }
+          
+          static bool getVec(void* m, void* obj, Vec3* out) {
+              void* box = nullptr;
+              if (!inv(m, obj, nullptr, &box) || !box) return false;
+              *out = *(Vec3*)il2cpp_object_unbox(box);
+              return true;
+          }
+          
+          static void setVec(void* m, void* obj, Vec3 v) {
+              void* a[1] = { &v };
+              inv(m, obj, a);
+          }
+          
+          static void applyLocal(void* p) {
+              static void* last = nullptr;
+              static float baseSpeed = 0, baseGrav = 0, curSize = 1.0f, holdY = 0;
+              static Vec3 baseScale = {1, 1, 1};
+              static bool speedTouched = false, noclipOn = false;
+              static double lastT = 0;
+              static int frame = 0;
+          
+              double t = nowSec();
+              float dt = (float)(t - lastT);
+              if (dt < 0 || dt > 0.1f) dt = 0.016f;
+              lastT = t;
+              frame++;
+          
+              void* tr = nullptr;
+              inv(mGetTransform, p, nullptr, &tr);
+          
+              if (p != last) {
+                  last = p;
+                  baseSpeed = *(float*)((char*)p + offSpeed);
+                  baseGrav = *(float*)((char*)p + offGrav);
+                  speedTouched = false; noclipOn = false; curSize = 1.0f;
+                  baseScale = {1, 1, 1};
+                  if (tr) getVec(mGetScale, tr, &baseScale);
+                  setStatus("listo (jugador encontrado)");
+              }
+          
+              // velocidad
+              float sm = g_speed;
+              if (sm != 1.0f || speedTouched) {
+                  *(float*)((char*)p + offSpeed) = baseSpeed * sm;
+                  speedTouched = (sm != 1.0f);
+              }
+          
+              // tamano
+              float sz = g_size;
+              if (tr && (sz != curSize || (sz != 1.0f && frame % 30 == 0))) {
+                  Vec3 v = { baseScale.x * sz, baseScale.y * sz, baseScale.z * sz };
+                  setVec(mSetScale, tr, v);
+                  curSize = sz;
+              }
+          
+              // noclip
+              void* col = *(void**)((char*)p + offCol);
+              void* rb = *(void**)((char*)p + offRb);
+              if (g_noclip) {
+                  if (tr) {
+                      Vec3 pos;
+                      if (getVec(mGetPos, tr, &pos)) {
+                          if (!noclipOn) holdY = pos.y;
+                          holdY += (float)g_vy * 8.0f * dt;
+                          pos.y = holdY;
+                          setVec(mSetPos, tr, pos);
+                      }
+                  }
+                  noclipOn = true;
+                  setCollider(col, false);
+                  *(float*)((char*)p + offGrav) = 0.0f;
+                  if (rb) {
+                      Vec3 v;
+                      if (getVec(mGetVel, rb, &v)) { v.y = 0.0f; setVec(mSetVel, rb, v); }
+                  }
+              } else if (noclipOn) {
+                  noclipOn = false;
+                  setCollider(col, true);
+                  *(float*)((char*)p + offGrav) = baseGrav;
+              }
+          }
+          
+          static void tick(void* self, bool isPlayer) {
+              if (g_unlock.exchange(false)) doUnlock();
+              if (!isPlayer) return;
+              void* lp = staticObj(fLocalPlayer);
+              if (lp && lp == self) applyLocal(self);
+          }
+          
+          static void (*orig_PlayerUpdate)(void*, void*);
+          static void hook_PlayerUpdate(void* self, void* mi) {
+              orig_PlayerUpdate(self, mi);
+              tick(self, true);
+          }
+          
+          static void (*orig_LobbyUpdate)(void*, void*);
+          static void hook_LobbyUpdate(void* self, void* mi) {
+              orig_LobbyUpdate(self, mi);
+              tick(self, false);
+          }
+          
+          static void (*orig_Kill)(void*, uint8_t, void*);
+          static void hook_Kill(void* self, uint8_t killer, void* mi) {
+              if (g_god) {
+                  void* lp = staticObj(fLocalPlayer);
+                  if (lp && lp == self) return; // no morir
+              }
+              orig_Kill(self, killer, mi);
+          }
+          
+          static bool installHooks() {
+              void* pU = *(void**)mPlayerUpdate;
+              void* pK = *(void**)mPlayerKill;
+              if (!pU || !pK) return false;
+              DobbyHook(pU, (dobby_dummy_func_t)hook_PlayerUpdate, (dobby_dummy_func_t*)&orig_PlayerUpdate);
+              DobbyHook(pK, (dobby_dummy_func_t)hook_Kill, (dobby_dummy_func_t*)&orig_Kill);
+              if (mLobbyUpdate && *(void**)mLobbyUpdate)
+                  DobbyHook(*(void**)mLobbyUpdate, (dobby_dummy_func_t)hook_LobbyUpdate, (dobby_dummy_func_t*)&orig_LobbyUpdate);
+              return true;
+          }
+          
+          // ---------- funciones que llama el menu (Java) ----------
+          static void n_noclip(JNIEnv*, jclass, jboolean on) { g_noclip = on; if (!on) g_vy = 0; }
+          static void n_god(JNIEnv*, jclass, jboolean on) { g_god = on; }
+          static void n_speed(JNIEnv*, jclass, jfloat v) { g_speed = v; }
+          static void n_size(JNIEnv*, jclass, jfloat v) { g_size = v; }
+          static void n_unlock(JNIEnv*, jclass) { g_unlock = true; }
+          static void n_vertical(JNIEnv*, jclass, jint d) { g_vy = d; }
+          static jstring n_status(JNIEnv* env, jclass) { return env->NewStringUTF(g_status); }
+          
+          // ---------- cargar el menu (Java) dentro del juego ----------
+          static JavaVM* g_vm = nullptr;
+          
+          static bool getVM() {
+              typedef jint (*GetVMs)(JavaVM**, jsize, jsize*);
+              GetVMs f = (GetVMs)dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs");
+              if (!f) {
+                  void* h = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
+                  if (h) f = (GetVMs)dlsym(h, "JNI_GetCreatedJavaVMs");
+              }
+              if (!f) return false;
+              jsize n = 0;
+              return f(&g_vm, 1, &n) == JNI_OK && n > 0 && g_vm;
+          }
+          
+          static bool jexc(JNIEnv* env) {
+              if (env->ExceptionCheck()) { env->ExceptionClear(); return true; }
+              return false;
+          }
+          
+          static bool startUiEnv(JNIEnv* env) {
+              jclass atCls = env->FindClass("android/app/ActivityThread");
+              if (jexc(env) || !atCls) return false;
+              jmethodID curApp = env->GetStaticMethodID(atCls, "currentApplication", "()Landroid/app/Application;");
+              if (jexc(env) || !curApp) return false;
+              jobject app = nullptr;
+              for (int i = 0; i < 120 && !app; i++) {
+                  app = env->CallStaticObjectMethod(atCls, curApp);
+                  if (jexc(env)) app = nullptr;
+                  if (!app) usleep(500000);
+              }
+              if (!app) return false;
+          
+              jclass ctxCls = env->FindClass("android/content/Context");
+              jmethodID getCL = env->GetMethodID(ctxCls, "getClassLoader", "()Ljava/lang/ClassLoader;");
+              jobject appLoader = env->CallObjectMethod(app, getCL);
+              jclass clCls = env->FindClass("java/lang/ClassLoader");
+              jmethodID loadClass = env->GetMethodID(clCls, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+          
+              jclass upCls = (jclass)env->CallObjectMethod(appLoader, loadClass, env->NewStringUTF("com.unity3d.player.UnityPlayer"));
+              if (jexc(env) || !upCls) return false;
+              jfieldID fAct = env->GetStaticFieldID(upCls, "currentActivity", "Landroid/app/Activity;");
+              if (jexc(env) || !fAct) return false;
+              jobject act = nullptr;
+              for (int i = 0; i < 240 && !act; i++) {
+                  act = env->GetStaticObjectField(upCls, fAct);
+                  if (!act) usleep(500000);
+              }
+              if (!act) return false;
+          
+              // carpeta donde guardar el dex
+              jmethodID getCC = env->GetMethodID(ctxCls, "getCodeCacheDir", "()Ljava/io/File;");
+              jobject dir = env->CallObjectMethod(app, getCC);
+              jclass fileCls = env->FindClass("java/io/File");
+              jmethodID getAbs = env->GetMethodID(fileCls, "getAbsolutePath", "()Ljava/lang/String;");
+              jstring jpath = (jstring)env->CallObjectMethod(dir, getAbs);
+              const char* cpath = env->GetStringUTFChars(jpath, nullptr);
+              std::string optDir = cpath;
+              env->ReleaseStringUTFChars(jpath, cpath);
+              std::string dexPath = optDir + "/modmenu_ui.dex";
+          
+              unlink(dexPath.c_str());
+              FILE* f = fopen(dexPath.c_str(), "wb");
+              if (!f) { LOG("no pude escribir el dex"); return false; }
+              fwrite(classes_dex, 1, classes_dex_len, f);
+              fclose(f);
+              chmod(dexPath.c_str(), 0400); // Android 14+ exige solo lectura
+          
+              jclass dcl = env->FindClass("dalvik/system/DexClassLoader");
+              jmethodID ctor = env->GetMethodID(dcl, "<init>",
+                  "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+              jobject loader2 = env->NewObject(dcl, ctor, env->NewStringUTF(dexPath.c_str()),
+                  env->NewStringUTF(optDir.c_str()), (jstring)nullptr, appLoader);
+              if (jexc(env) || !loader2) return false;
+          
+              jclass menu = (jclass)env->CallObjectMethod(loader2, loadClass, env->NewStringUTF("com.mod.Menu"));
+              if (jexc(env) || !menu) return false;
+          
+              JNINativeMethod nm[] = {
+                  { (char*)"nNoclip",   (char*)"(Z)V",                 (void*)n_noclip },
+                  { (char*)"nGod",      (char*)"(Z)V",                 (void*)n_god },
+                  { (char*)"nSpeed",    (char*)"(F)V",                 (void*)n_speed },
+                  { (char*)"nSize",     (char*)"(F)V",                 (void*)n_size },
+                  { (char*)"nUnlock",   (char*)"()V",                  (void*)n_unlock },
+                  { (char*)"nVertical", (char*)"(I)V",                 (void*)n_vertical },
+                  { (char*)"nStatus",   (char*)"()Ljava/lang/String;", (void*)n_status },
+              };
+              if (env->RegisterNatives(menu, nm, 7) != JNI_OK) { jexc(env); return false; }
+          
+              jmethodID start = env->GetStaticMethodID(menu, "start", "(Landroid/app/Activity;)V");
+              if (jexc(env) || !start) return false;
+              env->CallStaticVoidMethod(menu, start, act);
+              jexc(env);
+              return true;
+          }
+          
+          static void* worker(void*) {
+              for (int i = 0; i < 240 && !h_il2cpp; i++) {
+                  h_il2cpp = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
+                  if (!h_il2cpp) usleep(500000);
+              }
+              bool hooked = false;
+              if (h_il2cpp && resolveApi()) {
+                  sleep(4);
+                  bool ok = false;
+                  for (int i = 0; i < 90 && !ok; i++) {
+                      ok = initGame();
+                      if (!ok) sleep(1);
+                  }
+                  if (ok && installHooks()) {
+                      hooked = true;
+                      setStatus("hooks listos, entra a una partida");
+                  } else {
+                      setStatus("ERROR: no encontre las funciones del juego");
+                  }
+              } else {
+                  setStatus("ERROR: no encontre il2cpp");
+              }
+              (void)hooked;
+          
+              if (getVM()) {
+                  JNIEnv* env = nullptr;
+                  if (g_vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                      if (!startUiEnv(env)) LOG("no se pudo mostrar el menu");
+                      g_vm->DetachCurrentThread();
+                  }
+              }
+              return nullptr;
+          }
+          
+          __attribute__((constructor)) static void modInit() {
+              pthread_t t;
+              pthread_create(&t, nullptr, worker, nullptr);
+              pthread_detach(t);
+          }
+          EOF_CPP
+          cat > work/jni/CMakeLists.txt <<'EOF_CMAKE'
+          cmake_minimum_required(VERSION 3.18)
+          project(modmenu C CXX ASM)
+          set(CMAKE_CXX_STANDARD 17)
+          set(DOBBY_GENERATE_SHARED OFF CACHE BOOL "" FORCE)
+          add_subdirectory(Dobby)
+          add_library(modmenu SHARED modmenu.cpp)
+          target_include_directories(modmenu PRIVATE Dobby/include ${CMAKE_CURRENT_SOURCE_DIR})
+          target_link_libraries(modmenu dobby log dl)
+          EOF_CMAKE
+          cat > work/libmain.b64 <<'EOF_B64'
+          f0VMRgIBAQAAAAAAAAAAAAMAtwABAAAAAAAAAAAAAABAAAAAAAAAAKgTAAAAAAAAAAAAAEAAOAAK
+          AEAAGgAXAAYAAAAEAAAAQAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAMAIAAAAAAAAwAgAAAAAAAAgA
+          AAAAAAAAAQAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgCgAAAAAAACAKAAAAAAAAAEAA
+          AAAAAAABAAAABQAAACAKAAAAAAAAIEoAAAAAAAAgSgAAAAAAAAAFAAAAAAAAAAUAAAAAAAAAQAAA
+          AAAAAAEAAAAGAAAAIA8AAAAAAAAgjwAAAAAAACCPAAAAAAAAMAIAAAAAAADgEAAAAAAAAABAAAAA
+          AAAAAQAAAAYAAABQEQAAAAAAAFDRAAAAAAAAUNEAAAAAAAAwAAAAAAAAAEAAAAAAAAAAAEAAAAAA
+          AAACAAAABgAAADgPAAAAAAAAOI8AAAAAAAA4jwAAAAAAAKABAAAAAAAAoAEAAAAAAAAIAAAAAAAA
+          AFLldGQEAAAAIA8AAAAAAAAgjwAAAAAAACCPAAAAAAAAMAIAAAAAAADgEAAAAAAAAAEAAAAAAAAA
+          UOV0ZAQAAACACAAAAAAAAIAIAAAAAAAAgAgAAAAAAABcAAAAAAAAAFwAAAAAAAAABAAAAAAAAABR
+          5XRkBgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQA
+          AAAEAAAAcAIAAAAAAABwAgAAAAAAAHACAAAAAAAAvAAAAAAAAAC8AAAAAAAAAAQAAAAAAAAACAAA
+          AIQAAAABAAAAQW5kcm9pZAAXAAAAcjI3YwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADEyNDc5MDE4AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAFAAAAAMAAABHTlUAU3IXcbLd
+          9r9DJ3KLbsA2GeU3SK4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAABIAAAAAAAAAAAAA
+          AAAAAAAAAAAAEAAAABIAAAAAAAAAAAAAAAAAAAAAAAAAHQAAABIAAAAAAAAAAAAAAAAAAAAAAAAA
+          OgAAABIAAAAAAAAAAAAAAAAAAAAAAAAAQQAAABIAAAAAAAAAAAAAAAAAAAAAAAAASAAAABIAAAAA
+          AAAAAAAAAAAAAAAAAAAATQAAABIAAAAAAAAAAAAAAAAAAAAAAAAAUwAAABIAAAAAAAAAAAAAAAAA
+          AAAAAAAAWwAAABIAAAAAAAAAAAAAAAAAAAAAAAAAZAAAABIAAAAAAAAAAAAAAAAAAAAAAAAAawAA
+          ABIAAAAAAAAAAAAAAAAAAAAAAAAAcwAAABIAAAAAAAAAAAAAAAAAAAAAAAAALwAAABIADQCASgAA
+          AAAAAIwAAAAAAAAAAAACAAIAAgACAAIAAgADAAMAAgADAAMAAgABAAEAAQCEAAAAIAAAABAAAAAB
+          AAEAkgAAACAAAAAAAAAAYw0FAAAAAwCNAAAAAAAAAGMNBQAAAAIAjQAAAAAAAAAAAAAAAQAAAA0A
+          AAABAAAAGgAAAAAAAAAMAAAADQAAAOMjgo4AX19jeGFfZmluYWxpemUAX19jeGFfYXRleGl0AF9f
+          cmVnaXN0ZXJfYXRmb3JrAEpOSV9PbkxvYWQAbWFsbG9jAG1lbWNweQBmcmVlAGRsc3ltAGRsY2xv
+          c2UAc25wcmludGYAZGxvcGVuAGRsZXJyb3IAX19zdGFja19jaGtfZmFpbABsaWJkbC5zbwBMSUJD
+          AGxpYmMuc28AbGlibG9nLnNvAGxpYm0uc28AbGlibWFpbi5zbwAAII8AAAAAAAADBAAAAAAAACCP
+          AAAAAAAAKI8AAAAAAAADBAAAAAAAADhKAAAAAAAAMI8AAAAAAAADBAAAAAAAACBKAAAAAAAAUNEA
+          AAAAAAADBAAAAAAAALwHAAAAAAAAWNEAAAAAAAADBAAAAAAAADEIAAAAAAAAYNEAAAAAAAADBAAA
+          AAAAAAxLAAAAAAAAaNEAAAAAAAADBAAAAAAAAPkHAAAAAAAAcNEAAAAAAAADBAAAAAAAACAIAAAA
+          AAAAeNEAAAAAAAADBAAAAAAAAOhLAAAAAAAA8JAAAAAAAAACBAAAAQAAAAAAAAAAAAAA+JAAAAAA
+          AAACBAAAAgAAAAAAAAAAAAAAAJEAAAAAAAACBAAAAwAAAAAAAAAAAAAACJEAAAAAAAACBAAABAAA
+          AAAAAAAAAAAAEJEAAAAAAAACBAAABQAAAAAAAAAAAAAAGJEAAAAAAAACBAAABgAAAAAAAAAAAAAA
+          IJEAAAAAAAACBAAABwAAAAAAAAAAAAAAKJEAAAAAAAACBAAACAAAAAAAAAAAAAAAMJEAAAAAAAAC
+          BAAACQAAAAAAAAAAAAAAOJEAAAAAAAACBAAACgAAAAAAAAAAAAAAQJEAAAAAAAACBAAACwAAAAAA
+          AAAAAAAASJEAAAAAAAACBAAADAAAAAAAAAAAAAAAbGlidW5pdHkuc28AbG9hZAAlcy8lcwBVbmFi
+          bGUgdG8gcmV0cmlldmUgSmF2YSBWTQBVbnN1cHBvcnRlZCBWTSB2ZXJzaW9uAHVubG9hZABjb20v
+          dW5pdHkzZC9wbGF5ZXIvTmF0aXZlTG9hZGVyACgpWgBKTklfT25VbmxvYWQAKExqYXZhL2xhbmcv
+          U3RyaW5nOylaAGxpYmlsMmNwcC5zbwBVbmFibGUgdG8gbG9hZCBsaWJyYXJ5OiAlcyBbJXNdAEpO
+          SV9PbkxvYWQAAAEbAztcAAAACgAAAKBBAAB0AAAAsEEAAIgAAAC4QQAAnAAAAMBBAACwAAAA1EEA
+          AMQAAADwQQAA2AAAAABCAADwAAAAjEIAABQBAABoQwAAQAEAAGREAABkAQAAAAAAABAAAAAAAAAA
+          AXpSAAF8HgEbDB8AEAAAABgAAAAkQQAAEAAAAAAAAAAQAAAALAAAACBBAAAIAAAAAAAAABAAAABA
+          AAAAFEEAAAgAAAAAAAAAEAAAAFQAAAAIQQAAFAAAAAAAAAAQAAAAaAAAAAhBAAAcAAAAAAAAABQA
+          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
+          AAD7//9vAAAAAAEAAAAAAAAABwAAAAAAAAC4BQAAAAAAAAgAAAAAAAAA2AAAAAAAAAAJAAAAAAAA
+          ABgAAAAAAAAA+f//bwAAAAAJAAAAAAAAABcAAAAAAAAAkAYAAAAAAAACAAAAAAAAACABAAAAAAAA
+          AwAAAAAAAADYkAAAAAAAABQAAAAAAAAABwAAAAAAAAAGAAAAAAAAADADAAAAAAAACwAAAAAAAAAY
+          AAAAAAAAAAUAAAAAAAAAAAUAAAAAAAAKAAAAAAAAALcAAAAAAAAA9f7/bwAAAADgBAAAAAAAABoA
+          AAAAAAAAKI8AAAAAAAAcAAAAAAAAABAAAAAAAAAA8P//bwAAAACABAAAAAAAAP7//28AAAAAnAQA
+          AAAAAAD///9vAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          AAAAAEBOAAAAAAAAQE4AAAAAAABATgAAAAAAAEBOAAAAAAAAQE4AAAAAAABATgAAAAAAAEBOAAAA
+          AAAAQE4AAAAAAABATgAAAAAAAEBOAAAAAAAAQE4AAAAAAABATgAAAAAAAAAAAAAAAAAAAAAAAAAA
+          AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABMaW5rZXI6IExMRCAxOC4wLjMAQW5k
+          cm9pZCAoMTI0NzA5NzksICtwZ28sICtib2x0LCArbHRvLCArbWxnbywgYmFzZWQgb24gcjUyMjgx
+          N2MpIGNsYW5nIHZlcnNpb24gMTguMC4zIChodHRwczovL2FuZHJvaWQuZ29vZ2xlc291cmNlLmNv
+          bS90b29sY2hhaW4vbGx2bS1wcm9qZWN0IGQ4MDAzYTQ1NmQxNGEzZGViODA1NGNkYWE1MjlmZmJm
+          MDJkOWIyNjIpAAAubm90ZS51bml0eQAuZmluaV9hcnJheQAudGV4dAAuY29tbWVudAAubm90ZS5h
+          bmRyb2lkLmlkZW50AC5nb3QucGx0AC5yZWxhLnBsdAAuYnNzAC5keW5zdHIALmVoX2ZyYW1lX2hk
+          cgAuZ251LnZlcnNpb25fcgAuZGF0YS5yZWwucm8ALnJlbGEuZHluAC5nbnUudmVyc2lvbgAuZHlu
+          c3ltAC5nbnVfZGVidWdsaW5rAC5nbnUuaGFzaAAucmVscm9fcGFkZGluZwAuZWhfZnJhbWUALm5v
+          dGUuZ251LmJ1aWxkLWlkAC5keW5hbWljAC5zaHN0cnRhYgAucm9kYXRhAC5kYXRhABMAAAAYAAAA
+          AQAAAFVuaXR5IFRlY2hub2xvZ2llcwAANjAwMC4yLjE1ZjFfMDcwN2I2ZDFlOTE4AGxpYm1haW4u
+          ZGJnLnNvAAAMzT+hAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAAABwAAAAIAAAAAAAAAcAIAAAAAAABwAgAAAAAAAJgA
+          AAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAA1wAAAAcAAAACAAAAAAAAAAgDAAAAAAAACAMA
+          AAAAAAAkAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAJ0AAAALAAAAAgAAAAAAAAAwAwAA
+          AAAAADADAAAAAAAAUAEAAAAAAAAHAAAAAQAAAAgAAAAAAAAAGAAAAAAAAACQAAAA////bwIAAAAA
+          AAAAgAQAAAAAAACABAAAAAAAABwAAAAAAAAAAwAAAAAAAAACAAAAAAAAAAIAAAAAAAAAagAAAP7/
+          /28CAAAAAAAAAJwEAAAAAAAAnAQAAAAAAABAAAAAAAAAAAcAAAACAAAABAAAAAAAAAAAAAAAAAAA
+          ALQAAAD2//9vAgAAAAAAAADgBAAAAAAAAOAEAAAAAAAAIAAAAAAAAAADAAAAAAAAAAgAAAAAAAAA
+          AAAAAAAAAABUAAAAAwAAAAIAAAAAAAAAAAUAAAAAAAAABQAAAAAAALcAAAAAAAAAAAAAAAAAAAAB
+          AAAAAAAAAAAAAAAAAAAAhgAAAAQAAAACAAAAAAAAALgFAAAAAAAAuAUAAAAAAADYAAAAAAAAAAMA
+          AAAAAAAACAAAAAAAAAAYAAAAAAAAAEUAAAAEAAAAQgAAAAAAAACQBgAAAAAAAJAGAAAAAAAAIAEA
+          AAAAAAADAAAAEgAAAAgAAAAAAAAAGAAAAAAAAAD9AAAAAQAAADIAAAAAAAAAsAcAAAAAAACwBwAA
+          AAAAAM8AAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAXAAAAAEAAAACAAAAAAAAAIAIAAAA
+          AAAAgAgAAAAAAABcAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAM0AAAABAAAAAgAAAAAA
+          AADgCAAAAAAAAOAIAAAAAAAAQAEAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAZAAAAAQAA
+          AAYAAAAAAAAAIEoAAAAAAAAgCgAAAAAAABgEAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAA
+          SgAAAAEAAAAGAAAAAAAAAEBOAAAAAAAAQA4AAAAAAADgAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAA
+          AAAAAAAAAHkAAAABAAAAAwAAAAAAAAAgjwAAAAAAACAPAAAAAAAACAAAAAAAAAAAAAAAAAAAAAgA
+          AAAAAAAAAAAAAAAAAAANAAAADwAAAAMAAAAAAAAAKI8AAAAAAAAoDwAAAAAAABAAAAAAAAAAAAAA
+          AAAAAAAIAAAAAAAAAAAAAAAAAAAA6gAAAAYAAAADAAAAAAAAADiPAAAAAAAAOA8AAAAAAACgAQAA
+          AAAAAAcAAAAAAAAACAAAAAAAAAAQAAAAAAAAADwAAAABAAAAAwAAAAAAAADYkAAAAAAAANgQAAAA
+          AAAAeAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAC+AAAACAAAAAMAAAAAAAAAUJEAAAAA
+          AABQEQAAAAAAALAOAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAABQEAAAEAAAADAAAAAAAA
+          AFDRAAAAAAAAUBEAAAAAAAAwAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAE8AAAAIAAAA
+          AwAAAAAAAACA0QAAAAAAAIARAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAf
+          AAAAAQAAADAAAAAAAAAAAAAAAAAAAACAEQAAAAAAAMwAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEA
+          AAAAAAAA8wAAAAMAAAAAAAAAAAAAAAAAAAAAAAAATBIAAAAAAAALAQAAAAAAAAAAAAAAAAAAAQAA
+          AAAAAAAAAAAAAAAAAAEAAAAHAAAAAAAAAAAAAAAAAAAAAAAAAFcTAAAAAAAAOAAAAAAAAAAAAAAA
+          AAAAAAEAAAAAAAAAAAAAAAAAAAClAAAAAQAAAAAAAAAAAAAAAAAAAAAAAACQEwAAAAAAABQAAAAA
+          AAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAA
+          EOF_B64
+          base64 -d work/libmain.b64 > work/libmain.so
+      - name: Instalar herramientas
+        run: sudo apt-get update && sudo apt-get install -y patchelf xxd
+      - name: Compilar menu (Java a dex)
+        run: |
+          cd work
+          ANDROID_JAR=$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -1)
+          D8=$(ls -d $ANDROID_HOME/build-tools/*/d8 | sort -V | tail -1)
+          echo "android.jar: $ANDROID_JAR"
+          echo "d8: $D8"
+          mkdir -p classes dexout
+          javac -encoding UTF-8 --release 8 -cp "$ANDROID_JAR" -d classes java/com/mod/Menu.java
+          $D8 --release --min-api 23 --lib "$ANDROID_JAR" --output dexout $(find classes -name '*.class')
+          cp dexout/classes.dex jni/classes.dex
+          cd jni
+          xxd -i classes.dex > dex_data.h
+          head -c 200 dex_data.h
+      - name: Compilar codigo nativo
+        run: |
+          cd work/jni
+          git clone --depth 1 https://github.com/jmpews/Dobby.git Dobby
+          echo "Archivos con sintaxis Apple:"
+          grep -rl "@PAGE" Dobby/source || true
+          grep -rl "@PAGE" Dobby/source | xargs -r sed -E -i 's/cdecl\(([A-Za-z0-9_]+)\)@PAGEOFF/:lo12:\1/g; s/cdecl\(([A-Za-z0-9_]+)\)@PAGE/\1/g; s/([A-Za-z0-9_]+)@PAGEOFF/:lo12:\1/g; s/([A-Za-z0-9_]+)@PAGE/\1/g'
+          grep -rn "@PAGE" Dobby/source || echo "corregido"
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          echo "NDK: $NDK"
+          cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-23 -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j4
+          ls -la build/*.so
+      - name: Preparar archivos finales
+        run: |
+          cp work/jni/build/libmodmenu.so out/libmodmenu.so
+          cp work/libmain.so out/libmain.so
+          patchelf --add-needed libmodmenu.so out/libmain.so
+          readelf -d out/libmain.so | grep NEEDED
+          ls -la out
+      - name: Subir resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModMenu
+          path: out/
