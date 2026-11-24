@@ -1,4 +1,4 @@
-name: Construir mod
+name: .github/workflows/build.yml
 on:
   workflow_dispatch:
 jobs:
